@@ -50,7 +50,7 @@ tss.ss0 和 tss.esp0对cpu来说是只读的，因此每次进程从用户态切
 extern void switch_to(struct task_struct *pnext,int ldtss);
 ```
 
-新建一个switch_to.s 实现自定义切换函数。首先要保存ebp寄存器，接下来要取出表示下一个进程 PCB 的参数，并和 `current` 做一个比较：
+
 
 通过fork系统调用的父子进程栈示意图
 
@@ -60,9 +60,7 @@ extern void switch_to(struct task_struct *pnext,int ldtss);
 
 
 
-如果等于 current，则什么也不用做；
 
-如果不等于 current，就开始进程切换，依次完成
 
 1. PCB 的切换
 2. TSS 中的内核栈指针的重写,因为cpu中断处理需要根据TR寄存器找到tss再找到内核栈来保存用户进程信息，因此虽然我们不使用tss做进程切换，也还是要维护一个全局的tss，即任务0的tss,所有进程都共用这个tss。任务0的tss指针已经定义好了，类比current.
@@ -74,4 +72,5 @@ extern void switch_to(struct task_struct *pnext,int ldtss);
 
 要把进程的用户栈、用户程序和其内核栈通过压在内核栈中的 `SS:ESP`，`CS:IP` 关联在一起,并且配合switch_to 的返回逻辑 将寄存器圧栈。
 修改 task_struck,添加内核栈指针字段，修改硬编码的地方，具体是schedule.h 中init_task 硬编码和system_call.s 中的结构体字段偏移值。
+
 
