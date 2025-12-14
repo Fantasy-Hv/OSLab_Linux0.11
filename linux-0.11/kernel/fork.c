@@ -66,6 +66,7 @@ int copy_mem(int nr,struct task_struct * p)
  * information (task[nr]) and sets up the necessary registers. It
  * also copies the data segment in it's entirety.
  */
+extern void first_ret_from_kernel(void);
 int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		long ebx,long ecx,long edx,
 		long fs,long es,long ds,
@@ -74,14 +75,15 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	struct task_struct *p;
 	int i;
 	struct file *f;
-
-	p = (struct task_struct *) get_free_page();
+	//printk("call fork...%d\n",nr);
+	p = (struct task_struct *) get_free_page(); // 为新进程的pcb申请一页内存
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
-	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
-	p->state = TASK_UNINTERRUPTIBLE;
-	p->pid = last_pid;
+	*p = *current;	/* 浅拷贝父进程的大部分信息到新进程，不会复制内核栈 */
+	// 设置进程状态与基本信息
+	p->state = TASK_UNINTERRUPTIBLE; //不可睡眠
+	p->pid = last_pid; 
 	p->father = current->pid;
 	p->counter = p->priority;
 	p->signal = 0;
@@ -90,48 +92,56 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->utime = p->stime = 0;
 	p->cutime = p->cstime = 0;
 	p->start_time = jiffies;
-	p->tss.back_link = 0;
-	p->tss.esp0 = PAGE_SIZE + (long) p;
-	p->tss.ss0 = 0x10;
-	p->tss.eip = eip;
-	p->tss.eflags = eflags;
-	p->tss.eax = 0;
-	p->tss.ecx = ecx;
-	p->tss.edx = edx;
-	p->tss.ebx = ebx;
-	p->tss.esp = esp;
-	p->tss.ebp = ebp;
-	p->tss.esi = esi;
-	p->tss.edi = edi;
-	p->tss.es = es & 0xffff;
-	p->tss.cs = cs & 0xffff;
-	p->tss.ss = ss & 0xffff;
-	p->tss.ds = ds & 0xffff;
-	p->tss.fs = fs & 0xffff;
-	p->tss.gs = gs & 0xffff;
-	p->tss.ldt = _LDT(nr);
-	p->tss.trace_bitmap = 0x80000000;
-	if (last_task_used_math == current)
+		if (last_task_used_math == current)
 		__asm__("clts ; fnsave %0"::"m" (p->tss.i387));
+	// 	为新进程复制父进程内存空间（代码、数据、堆栈）
 	if (copy_mem(nr,p)) {
 		task[nr] = NULL;
 		free_page((long) p);
 		return -EAGAIN;
 	}
+
+	// 初始化内核栈内容
+	long * kernelstack = (long *) (PAGE_SIZE + (long) p);
+	// 给内核栈做成能用iret返回的样子
+	*(--kernelstack) = ss & 0xffff;
+	*(--kernelstack) = esp;
+	*(--kernelstack) = eflags;
+	*(--kernelstack) = cs & 0xffff;
+	*(--kernelstack) = eip;
+	*(--kernelstack) = ds & 0xffff;
+	*(--kernelstack) = es & 0xffff;
+	*(--kernelstack) = fs & 0xffff;
+	*(--kernelstack) = gs & 0xffff;
+	*(--kernelstack) = esi;
+	*(--kernelstack) = edi;
+	*(--kernelstack) = edx;
+	*(--kernelstack) = first_ret_from_kernel; 
+	*(--kernelstack) = ebp;
+	*(--kernelstack) = ebx;
+	*(--kernelstack) = ecx;
+	*(--kernelstack) = 0; // 为子进程返回0
+	p->kernelstack = kernelstack;
+	printk("kernlstack inited\n");
+
+	// 复制打开文件
 	for (i=0; i<NR_OPEN;i++)
 		if ((f=p->filp[i]))
 			f->f_count++;
+	// 复制文件系统信息		
 	if (current->pwd)
 		current->pwd->i_count++;
 	if (current->root)
 		current->root->i_count++;
 	if (current->executable)
 		current->executable->i_count++;
-	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY,&(p->tss));
-	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY,&(p->ldt));
+	//  在 GDT 中注册 TSS 和 LDT ，这两个东西也占用内存段,故为它们设置段描述符
+	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY,&(p->tss)); // tss 的段描述符
+	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY,&(p->ldt)); // ldt 的段描述符
 	p->state = TASK_RUNNING;	/* do this last, just in case */
-	return last_pid;
+	return last_pid; 
 }
+
 
 int find_empty_process(void)
 {

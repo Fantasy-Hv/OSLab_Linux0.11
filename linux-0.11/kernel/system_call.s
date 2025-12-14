@@ -18,16 +18,16 @@
  *
  *	 0(%esp) - %eax
  *	 4(%esp) - %ebx
- *	 8(%esp) - %ecx
- *	 C(%esp) - %edx
- *	10(%esp) - %fs
- *	14(%esp) - %es
- *	18(%esp) - %ds
- *	1C(%esp) - %eip
- *	20(%esp) - %cs
- *	24(%esp) - %eflags
- *	28(%esp) - %oldesp
- *	2C(%esp) - %oldss
+  *	 8(%esp) - %ecx
+  *	 C(%esp) - %edx
+  *	10(%esp) - %fs
+  *	14(%esp) - %es
+  *	18(%esp) - %ds
+  *	1C(%esp) - %eip
+  *	20(%esp) - %cs
+  *	24(%esp) - %eflags
+  *	28(%esp) - %oldesp
+  *	2C(%esp) - %oldss
  */
 
 SIG_CHLD	= 17
@@ -48,9 +48,9 @@ OLDSS		= 0x2C
 state	= 0		# these are offsets into the task-struct.
 counter	= 4
 priority = 8
-signal	= 12
-sigaction = 16		# MUST be 16 (=len of sigaction)
-blocked = (33*16)
+signal	= 16
+sigaction = 20		# MUST be 16 (=len of sigaction)
+blocked = (37*16)
 
 # offsets within sigaction
 sa_handler = 0
@@ -75,7 +75,7 @@ bad_sys_call:
 .align 2
 reschedule:
 	pushl $ret_from_sys_call
-	jmp schedule
+	jmp schedule 
 .align 2
 system_call:
 	cmpl $nr_system_calls-1,%eax
@@ -87,7 +87,7 @@ system_call:
 	pushl %ecx		# push %ebx,%ecx,%edx as parameters
 	pushl %ebx		# to the system call
 	movl $0x10,%edx		# set up ds,es to kernel space
-	mov %dx,%ds
+	mov %dx,%ds				# dx 是 edx 低16位
 	mov %dx,%es
 	movl $0x17,%edx		# fs points to local data space
 	mov %dx,%fs
@@ -118,15 +118,19 @@ ret_from_sys_call:
 	pushl %ecx
 	call do_signal
 	popl %eax
-3:	popl %eax
-	popl %ebx
-	popl %ecx
-	popl %edx
-	pop %fs
-	pop %es
-	pop %ds
-	iret
-
+3:	popl %eax		#	 0(%esp) - %eax
+	popl %ebx		#	 4(%esp) - %ebx
+	popl %ecx		#	 8(%esp) - %ecx
+	popl %edx		#	 C(%esp) - %edx
+	pop %fs			#	10(%esp) - %fs
+	pop %es			#	14(%esp) - %es
+	pop %ds			#	18(%esp) - %ds
+	iret			# iret 从栈中弹出以下内容到对应寄存器：
+					#	1C(%esp) - %eip
+					#	20(%esp) - %cs
+					#	24(%esp) - %eflags
+					#	28(%esp) - %oldesp
+					#	2C(%esp) - %oldss
 .align 2
 coprocessor_error:
 	push %ds
@@ -283,3 +287,55 @@ parallel_interrupt:
 	outb %al,$0x20
 	popl %eax
 	iret
+
+
+KERNEL_STACK=12
+ESP0 = 4
+.globl switch_to , first_ret_from_kernel
+switch_to: 
+    pushl %ebp
+    movl %esp,%ebp
+    pushl %ebx
+    pushl %ecx 
+    pushl %eax
+    movl 8(%ebp),%ebx # assign pnext to ebx
+    cmpl %ebx ,current 
+    je  quit_switch  # if the same process ,do nothing
+# 切换PCB
+    movl %ebx,%eax # pnext -> eax
+    xchgl %eax,current # eax <-> current ==> eax= oldprocess current = new process
+# TSS中的内核栈指针的重写
+    movl tss,%ecx 
+    addl $4096,%ebx # ebx point to target task pcb ,ebx+page_size points to the kernel stack of target_task 
+    movl %ebx,ESP0(%ecx) # set kernel stack pointer of current tss with that of target task
+# 切换内核栈
+    movl %esp,KERNEL_STACK(%eax) # save kernelstack ptr of old process
+    movl 8(%ebp),%ebx
+    movl KERNEL_STACK(%ebx),%esp # get kernelstack ptr of new process
+    # 现在开始使用的栈就是目标进程的内核栈了，pcb也是目标进程的pcb，可以说，线程的切换已经完成，接下来是内存映射的切换
+# 切换LDT 
+    movl 12(%ebp),%ecx # take the selector of new process's ldt in gdt
+    lldt %cx   # 修改 LDTR 寄存器，一旦完成了修改，下一个进程在执行用户态程序时使用的映射表就是自己的 LDT 表了
+# 切换用户态内存段选择子
+    movl $0x17,%ecx
+    mov %cx,%fs
+# 数学处理协程，不重要
+    cmpl %eax,last_task_used_math
+    jne quit_switch
+    clts
+quit_switch:
+    popl %eax # pop 的都是目标进程内核栈的东西，为了让这里能有东西pop，需要在进程创建之初就设置好，故需要修改fork
+    popl %ecx
+    popl %ebx
+    popl %ebp
+    ret     # 进程在执行switch_to 时下线，恢复时也是从switch_to中返回
+.align 2
+first_ret_from_kernel:#将这个标号初始化到子进程的内核栈中，这样执行 ret 以后就会跳转到 first_ret_from_kernel 去执行而不是从ret_from_sys_call执行。
+    popl %edx
+    popl %edi
+    popl %esi
+    pop %gs
+    pop %fs
+    pop %es
+    pop %ds
+    iret
