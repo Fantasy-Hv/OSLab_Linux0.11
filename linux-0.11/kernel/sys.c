@@ -12,6 +12,7 @@
 #include <asm/segment.h>
 #include <sys/times.h>
 #include <sys/utsname.h>
+#include <string.h>
 
 int sys_ftime()
 {
@@ -233,4 +234,95 @@ int sys_umask(int mask)
 
 	current->umask = mask & 0777;
 	return (old);
+}
+#define sem_name_size 32
+#define sem_table_size 64
+typedef struct {
+	struct task_struct **p;  //4B
+	int value;//4B
+	char name[sem_name_size]; // 4B
+} semaphore;
+semaphore* sem_table[sem_table_size] = {NULL};
+
+strcpfs2kn(char * dest,const char * src,int len){
+	int i = 0;
+	char * source = src;
+	while (i<len)
+	{
+		char c = get_fs_byte(source++);
+		dest[i++]=c;
+		if(c=='\0')break; 
+	}
+}
+int sys_sem_open(char* name,int value){
+	//该函数执行在内核态，使用内核代码数据段，因为指针存储的是用户空间的逻辑地址，所以要用特殊的函数访问才能拿到正确的数据
+	//1.查找该名称对应信号量，如果没有，就创建信号量，如果没有空间了，就返回-1；
+	cli();
+	int i = 0;
+	int slot = -1;
+	char name_kn[sem_name_size];
+	strcpfs2kn(name_kn,name,sem_name_size);
+	while(i<sem_table_size){
+		if (sem_table[i]) {
+			if(strcmp(name_kn,sem_table[i]->name)) // 如果找打了，就返回标识
+				break;
+		}else  slot = i; // 该槽位是空的
+		i++;
+	}// 1找到了 2没找到 
+	if(i<sem_table_size) {
+		sti();
+		return i;
+	}  
+	if(slot>=0) { // 没找到，有空闲槽位
+		sem_table[slot] = malloc(12);
+		strcpy(sem_table[slot]->name,name_kn);
+		sem_table[i]->value = value;
+		sem_table[i]->p = malloc(4); //这里要修改
+		*(sem_table[i]->p) = NULL;		
+	}
+	sti();
+	return slot;
+}
+
+int sys_sem_wait(int sem_n){
+	cli();
+	int res ;
+	if((res = sem_n>=0&&sem_n<sem_table_size&&sem_table[sem_n])) {
+		if(--sem_table[sem_n]->value < 0 )
+			sleep_on(sem_table[sem_n]->p); 
+	} 
+	sti();
+	return !res;
+}
+
+int sys_sem_post(int sem_n){
+	cli();
+	int res ;
+	if((res = sem_n>=0&&sem_n<sem_table_size&&sem_table[sem_n])) {
+		if(++sem_table[sem_n]->value <= 0 )
+			wake_up(sem_table[sem_n]->p); 
+	} 
+	sti();
+	return !res;
+}
+
+int sys_sem_remove(char * name){
+	cli();
+	int i = 0;
+	int slot = -1;
+	char name_kn[sem_name_size];
+	strcpfs2kn(name_kn,name,sem_name_size);
+	while(i<sem_table_size){
+		if (sem_table[i]&&strcmp(name_kn,sem_table[i]->name)) // 如果找到了，就返回标识
+			break;
+		i++;
+	}
+	if(i<sem_table_size){ // 找到了
+		semaphore * cur = sem_table[i];
+		free_s(cur->p,4);
+		free_s(cur->name,sem_name_size);
+		free_s(cur,12);
+	}
+	sti();
+	return 0;
 }
