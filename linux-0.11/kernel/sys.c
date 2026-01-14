@@ -5,7 +5,7 @@
  */
 
 #include <errno.h>
-
+#include <system.h>
 #include <linux/sched.h>
 #include <linux/tty.h>
 #include <linux/kernel.h>
@@ -238,21 +238,32 @@ int sys_umask(int mask)
 #define sem_name_size 32
 #define sem_table_size 64
 typedef struct {
-	struct task_struct **p;  //4B
-	int value;//4B
 	char name[sem_name_size]; // 4B
+	int value;//4B
+	struct task_struct **p;  //4B
 } semaphore;
 semaphore* sem_table[sem_table_size] = {NULL};
-
-strcpfs2kn(char * dest,const char * src,int len){
+// kernel space func
+int streq(const char * a,const char * b){
+	char * cura = a,curb = b;
+	while (*cura==*curb) {
+		if(*cura == '\0'&&*curb=='\0')
+			return 1;
+		cura++;
+		curb++;
+	}
+	return 0;
+}
+int strcp(char * dest,const char * src,int len,char same_source){
 	int i = 0;
 	char * source = src;
 	while (i<len)
 	{
-		char c = get_fs_byte(source++);
+		char c = same_source ? *(source++) : get_fs_byte(source++);
 		dest[i++]=c;
 		if(c=='\0')break; 
 	}
+	return i<=len&&dest[i-1]=='\0';
 }
 int sys_sem_open(char* name,int value){
 	//该函数执行在内核态，使用内核代码数据段，因为指针存储的是用户空间的逻辑地址，所以要用特殊的函数访问才能拿到正确的数据
@@ -261,24 +272,31 @@ int sys_sem_open(char* name,int value){
 	int i = 0;
 	int slot = -1;
 	char name_kn[sem_name_size];
-	strcpfs2kn(name_kn,name,sem_name_size);
+	if(!strcp(name_kn,name,sem_name_size,0))
+		return -1;
+	//printk("get sem name: %s\n",name_kn);
 	while(i<sem_table_size){
-		if (sem_table[i]) {
-			if(strcmp(name_kn,sem_table[i]->name)) // 如果找打了，就返回标识
+		if (sem_table[i]) { // 该槽位有人
+			//printk("cmping : %s and %s\n",name_kn,sem_table[i]->name);
+			if(streq(name_kn,sem_table[i]->name)) {// strcmp buggy
+				//printk("sem already existed \n");
 				break;
-		}else  slot = i; // 该槽位是空的
+			}
+		}else if(slot<0) slot = i; // 该槽位是空的
 		i++;
 	}// 1找到了 2没找到 
-	if(i<sem_table_size) {
+	if(i<sem_table_size) { // buggy
 		sti();
+		//printk("sem already existed \n");
 		return i;
 	}  
 	if(slot>=0) { // 没找到，有空闲槽位
-		sem_table[slot] = malloc(12);
-		strcpy(sem_table[slot]->name,name_kn);
-		sem_table[i]->value = value;
-		sem_table[i]->p = malloc(4); //这里要修改
-		*(sem_table[i]->p) = NULL;		
+		sem_table[slot] = malloc(sizeof(semaphore));
+		strcp(sem_table[slot]->name,name_kn,sem_name_size,1); // buggy !
+		sem_table[slot]->value = value;
+		sem_table[slot]->p = malloc(4); //这里要修改
+		*(sem_table[slot]->p) = NULL;
+		//printk("sem %s init in slot %d\n",sem_table[slot]->name,slot);		
 	}
 	sti();
 	return slot;
@@ -288,8 +306,11 @@ int sys_sem_wait(int sem_n){
 	cli();
 	int res ;
 	if((res = sem_n>=0&&sem_n<sem_table_size&&sem_table[sem_n])) {
-		if(--sem_table[sem_n]->value < 0 )
+		//printk("sem_wait for %d\n",sem_n);
+		if(--sem_table[sem_n]->value < 0 ) {
+			//printk("%d slp on sem %s\n",current->pid,sem_table[sem_n]->name);
 			sleep_on(sem_table[sem_n]->p); 
+		}
 	} 
 	sti();
 	return !res;
@@ -299,8 +320,11 @@ int sys_sem_post(int sem_n){
 	cli();
 	int res ;
 	if((res = sem_n>=0&&sem_n<sem_table_size&&sem_table[sem_n])) {
-		if(++sem_table[sem_n]->value <= 0 )
+		//printk("post sem %d to value %d\n",sem_n,sem_table[sem_n]->value);
+		if(++sem_table[sem_n]->value <= 0 ) {
+			//printk("try wake up on sem %s\n",sem_table[sem_n]->name);
 			wake_up(sem_table[sem_n]->p); 
+		}
 	} 
 	sti();
 	return !res;
@@ -311,7 +335,7 @@ int sys_sem_remove(char * name){
 	int i = 0;
 	int slot = -1;
 	char name_kn[sem_name_size];
-	strcpfs2kn(name_kn,name,sem_name_size);
+	strcp(name_kn,name,sem_name_size,0);
 	while(i<sem_table_size){
 		if (sem_table[i]&&strcmp(name_kn,sem_table[i]->name)) // 如果找到了，就返回标识
 			break;
@@ -321,7 +345,7 @@ int sys_sem_remove(char * name){
 		semaphore * cur = sem_table[i];
 		free_s(cur->p,4);
 		free_s(cur->name,sem_name_size);
-		free_s(cur,12);
+		free_s(cur,sizeof(semaphore));
 	}
 	sti();
 	return 0;
