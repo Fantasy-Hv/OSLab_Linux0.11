@@ -189,7 +189,6 @@ void wake_up(struct task_struct **p)
 {
 	if (p && *p) {
 		(**p).state=0;
-		printk("wake up %d \n",(**p).pid);
 		*p=NULL;
 	}
 }
