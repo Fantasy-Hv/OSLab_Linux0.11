@@ -350,3 +350,11 @@ int sys_sem_remove(char * name){
 	sti();
 	return 0;
 }
+
+int sys_shmget(int key,size_t size){
+
+}
+
+void* sys_shmat(int shmid,const void * shmaddr){
+
+}

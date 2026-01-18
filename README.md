@@ -62,7 +62,7 @@ int shmget(key_t key, size_t size);
 	//size：共享内存段的大小（字节）。如果是获取已存在的段，可以设为 0。
 
 //将 shmid对应的共享内存段附加到调用进程的地址空间，并返回映射的起始（逻辑）地址。
-void *shmat(int shmid, const void * shmaddr, int shmflg);
+void *shmat(int shmid, const void * shmaddr);
 	// shmaddr：期望的映射地址（通常设为 NULL，由系统自动选择）
 
 ```
