@@ -292,9 +292,9 @@ int sys_sem_open(char* name,int value){
 	}  
 	if(slot>=0) { // 没找到，有空闲槽位
 		sem_table[slot] = malloc(sizeof(semaphore));
-		strcp(sem_table[slot]->name,name_kn,sem_name_size,1); // buggy !
+		strcp(sem_table[slot]->name,name_kn,sem_name_size,1); 
 		sem_table[slot]->value = value;
-		sem_table[slot]->p = malloc(4); //这里要修改
+		sem_table[slot]->p = malloc(4); 
 		*(sem_table[slot]->p) = NULL;
 		//printk("sem %s init in slot %d\n",sem_table[slot]->name,slot);		
 	}
@@ -350,11 +350,66 @@ int sys_sem_remove(char * name){
 	sti();
 	return 0;
 }
+/**
+ * 共享内存段，就是让段中的页面映射到同一个物理页
+ * 具体来说，申请k页的共享页，然后建立页表映射
+ * 关键是这里的段id，需要一个数据结构来跟踪维护共享的内存段
+ */
+typedef struct {
+	/*
+	1,需要能够从shmid查找到该共享段
+	2，需要能从该对象查找到对应的物理页框
+	*/
+	unsigned long* pages;// 页框地址数组 ,4B
+	int page_cnt; // 页框数 4B
+	char ref_cnt; // 引用数，当引用数为0时释放1B
+} shmseg; // 描述共享内存区域
+#define SHM_CAP 64
+shmseg* shmtable[SHM_CAP] = {NULL}; // 最多存在64个共享内存区域
 
-int sys_shmget(int key,size_t size){
-
+unsigned long sys_shmget(int key,size_t size){
+	// 到表中查找是否存在该区域，如果不存在，找到一个空闲槽位
+	int shmid = key % SHM_CAP;
+	unsigned long 	lin_base = current->start_code+current->brk; // 共享区域的线性基址
+	if(current->brk >= sys_brk(current->brk+size))return 0;
+	int pn ;
+	if(shmtable[shmid]==NULL) { //  没有物理页，需要申请
+		pn = (size+PAGE_SIZE-1)/(PAGE_SIZE);
+		shmseg* seg  = malloc(9);
+		seg->page_cnt = pn;
+		seg->pages = malloc(4*pn);
+		while(pn--)
+			if (!(seg->pages[pn]=get_free_page())) oom();
+		seg->ref_cnt =0;
+		shmtable[shmid] = seg;
+	}
+	// 建立映射
+	unsigned long cor = lin_base;
+	pn = shmtable[shmid]->page_cnt;
+	while (pn--) {
+		put_page(shmtable[shmid]->pages[pn],cor);
+		cor+= 0x1000;// 页号+1
+	}
+	shmtable[shmid]->ref_cnt++;
+	return lin_base - current->start_code; // 返回逻辑基址
+}
+// 取消共享该内存区域，这意味着需要撤销该进程虚拟地址处的物理页映射
+void sys_shmdt(int key,void* addr){ //借鉴put_page
+	int shmid = key % SHM_CAP;
+	if(shmid<0||shmtable[shmid]==NULL)return NULL;
+	// 解除映射？需要什么东西？1.起始地址2.大小
+	unsigned long address = (unsigned long) addr;
+	for (int i = 0; i < shmtable[shmid]->page_cnt; i++) {
+		unsigned long  *page_table = (unsigned long *) (((unsigned long)address>>20) & 0xffc);// 页目录号每个页目录项占4字节，页目录表物理基址为0，因此(addr>>20)<<2就得到了对应页表的物理基址
+		page_table = (unsigned long *) (0xfffff000 & *page_table); // 进入二级页表
+		page_table[((unsigned long)addr>>12) & 0x3ff] &= ~1;
+	}
+	if(--shmtable[shmid]->ref_cnt <=0){
+		for (size_t i = 0; i < shmtable[shmid]->page_cnt; i++) 
+			free_page(shmtable[shmid]->pages[i]);
+		free_s(shmtable[shmid]->pages,shmtable[shmid]->page_cnt*4);
+		free_s(shmtable[shmid],9);
+		shmtable[shmid]=NULL;
+	}
 }
 
-void* sys_shmat(int shmid,const void * shmaddr){
-
-}

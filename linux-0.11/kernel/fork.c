@@ -49,10 +49,10 @@ int copy_mem(int nr,struct task_struct * p)
 		panic("We don't support separate I&D");
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
-	new_data_base = new_code_base = nr * 0x4000000;
-	p->start_code = new_code_base;
-	set_base(p->ldt[1],new_code_base);
-	set_base(p->ldt[2],new_data_base);
+	new_data_base = new_code_base = nr * 0x4000000; // 新进程的代码段和数据段基址都是一样的
+	p->start_code = new_code_base; // 存到pcb的start_code字段中，和ldt中的段基址一致
+	set_base(p->ldt[1],new_code_base); // 第1项描述cpu分段机制的代码段
+	set_base(p->ldt[2],new_data_base); // 第2项描述cpu分段机制的数据段
 	if (copy_page_tables(old_data_base,new_data_base,data_limit)) {
 		printk("free_page_tables: from copy_mem\n");
 		free_page_tables(new_data_base,data_limit);

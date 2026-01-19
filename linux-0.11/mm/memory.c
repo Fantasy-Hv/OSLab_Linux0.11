@@ -204,16 +204,16 @@ unsigned long put_page(unsigned long page,unsigned long address)
 		printk("Trying to put page %p at %p\n",page,address);
 	if (mem_map[(page-LOW_MEM)>>12] != 1)
 		printk("mem_map disagrees with %p at %p\n",page,address);
-	page_table = (unsigned long *) ((address>>20) & 0xffc);
+	page_table = (unsigned long *) ((address>>20) & 0xffc);// 页目录号每个页目录项占4字节，页目录表物理基址为0，因此(addr>>20)<<2就得到了对应页表的物理基址
 	if ((*page_table)&1)
-		page_table = (unsigned long *) (0xfffff000 & *page_table);
+		page_table = (unsigned long *) (0xfffff000 & *page_table); // 进入二级页表
 	else {
 		if (!(tmp=get_free_page()))
 			return 0;
 		*page_table = tmp|7;
 		page_table = (unsigned long *) tmp;
 	}
-	page_table[(address>>12) & 0x3ff] = page | 7;
+	page_table[(address>>12) & 0x3ff] = page | 7; // 将物理页框填进去对应的页表项
 /* no need for invalidate */
 	return page;
 }
@@ -378,20 +378,20 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	}
 	if (share_page(tmp))
 		return;
-	if (!(page = get_free_page()))
+	if (!(page = get_free_page())) // step1 : allocate mm page
 		oom();
 /* remember that 1 block is used for header */
 	block = 1 + tmp/BLOCK_SIZE;
 	for (i=0 ; i<4 ; block++,i++)
 		nr[i] = bmap(current->executable,block);
-	bread_page(page,current->executable->i_dev,nr);
+	bread_page(page,current->executable->i_dev,nr); // setp2 load content to mm page
 	i = tmp + 4096 - current->end_data;
 	tmp = page + 4096;
 	while (i-- > 0) {
 		tmp--;
 		*(char *)tmp = 0;
 	}
-	if (put_page(page,address))
+	if (put_page(page,address)) //step3 establish mapping
 		return;
 	free_page(page);
 	oom();
