@@ -42,10 +42,8 @@ int main(int argc, char *argv[]){
             char buffer[10];
             while (cnt_ch<=10) {
                 sem_wait(full); 
-                //READD HEAD_item
                 read(buffd,(char*)&readitem,2); 
                 sprintf(buffer, "c %d\n", readitem); //log_1 
-                //update header  
                 sem_wait(mutex);
                 write(ttyfd, buffer, strlen(buffer)); //log_2
                 sem_post(mutex);
@@ -54,7 +52,6 @@ int main(int argc, char *argv[]){
             }
             return 0;
         }
-    }
 		short cnt_p = 1;
 
 		char str[10];

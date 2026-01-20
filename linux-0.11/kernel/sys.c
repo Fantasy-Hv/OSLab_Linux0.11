@@ -5,7 +5,7 @@
  */
 
 #include <errno.h>
-#include <system.h>
+#include <asm/system.h>
 #include <linux/sched.h>
 #include <linux/tty.h>
 #include <linux/kernel.h>
@@ -13,7 +13,6 @@
 #include <sys/times.h>
 #include <sys/utsname.h>
 #include <string.h>
-
 int sys_ftime()
 {
 	return -ENOSYS;
@@ -245,7 +244,7 @@ typedef struct {
 semaphore* sem_table[sem_table_size] = {NULL};
 // kernel space func
 int streq(const char * a,const char * b){
-	char * cura = a,curb = b;
+	char * cura = a;char * curb = b;
 	while (*cura==*curb) {
 		if(*cura == '\0'&&*curb=='\0')
 			return 1;
@@ -292,11 +291,11 @@ int sys_sem_open(char* name,int value){
 	}  
 	if(slot>=0) { // 没找到，有空闲槽位
 		sem_table[slot] = malloc(sizeof(semaphore));
-		strcp(sem_table[slot]->name,name_kn,sem_name_size,1); 
+		//printk("entry mm got!\n");
+		strcp(sem_table[slot]->name,name_kn,sem_name_size,1);
 		sem_table[slot]->value = value;
-		sem_table[slot]->p = malloc(4); 
+		sem_table[slot]->p = malloc(4); //这里要修改
 		*(sem_table[slot]->p) = NULL;
-		//printk("sem %s init in slot %d\n",sem_table[slot]->name,slot);		
 	}
 	sti();
 	return slot;
@@ -306,9 +305,7 @@ int sys_sem_wait(int sem_n){
 	cli();
 	int res ;
 	if((res = sem_n>=0&&sem_n<sem_table_size&&sem_table[sem_n])) {
-		//printk("sem_wait for %d\n",sem_n);
 		if(--sem_table[sem_n]->value < 0 ) {
-			//printk("%d slp on sem %s\n",current->pid,sem_table[sem_n]->name);
 			sleep_on(sem_table[sem_n]->p); 
 		}
 	} 
@@ -320,16 +317,13 @@ int sys_sem_post(int sem_n){
 	cli();
 	int res ;
 	if((res = sem_n>=0&&sem_n<sem_table_size&&sem_table[sem_n])) {
-		//printk("post sem %d to value %d\n",sem_n,sem_table[sem_n]->value);
 		if(++sem_table[sem_n]->value <= 0 ) {
-			//printk("try wake up on sem %s\n",sem_table[sem_n]->name);
 			wake_up(sem_table[sem_n]->p); 
-		}
+}
 	} 
 	sti();
 	return !res;
 }
-
 int sys_sem_remove(char * name){
 	cli();
 	int i = 0;
@@ -366,50 +360,69 @@ typedef struct {
 } shmseg; // 描述共享内存区域
 #define SHM_CAP 64
 shmseg* shmtable[SHM_CAP] = {NULL}; // 最多存在64个共享内存区域
-
+static void oomem(){
+		printk("out of memory\n\r");
+		do_exit(SIGSEGV);
+}
 unsigned long sys_shmget(int key,size_t size){
 	// 到表中查找是否存在该区域，如果不存在，找到一个空闲槽位
 	int shmid = key % SHM_CAP;
+	sys_brk(current->brk+1);
 	unsigned long 	lin_base = current->start_code+current->brk; // 共享区域的线性基址
-	if(current->brk >= sys_brk(current->brk+size))return 0;
+	unsigned long start = current->brk;
+	if(start >= sys_brk(current->brk+size)){
+		printk("heap overflow\n");
+		return 0;
+	}
 	int pn ;
+	char newshm = 0;
 	if(shmtable[shmid]==NULL) { //  没有物理页，需要申请
+		newshm = 1;
 		pn = (size+PAGE_SIZE-1)/(PAGE_SIZE);
-		shmseg* seg  = malloc(9);
+		shmtable[shmid] = malloc(9);
+		shmseg* seg = shmtable[shmid];
 		seg->page_cnt = pn;
 		seg->pages = malloc(4*pn);
-		while(pn--)
-			if (!(seg->pages[pn]=get_free_page())) oom();
-		seg->ref_cnt =0;
-		shmtable[shmid] = seg;
+		while(pn--){
+			printk("getting page %d\n",pn);
+			if (!(seg->pages[pn]=get_free_page())) oomem();
+		}
+		seg->ref_cnt = 0;
 	}
 	// 建立映射
 	unsigned long cor = lin_base;
 	pn = shmtable[shmid]->page_cnt;
+	printk("read pn %d\n",pn);
 	while (pn--) {
+		//printk("mapping lin_addr 0x%x to page 0x%x\n",cor,shmtable[shmid]->pages[pn]);
 		put_page(shmtable[shmid]->pages[pn],cor);
+		if(!newshm)add_mem_user(shmtable[shmid]->pages[pn]);
 		cor+= 0x1000;// 页号+1
 	}
 	shmtable[shmid]->ref_cnt++;
+	//printk("logical addr = 0x%x\n",lin_base-current->start_code);
 	return lin_base - current->start_code; // 返回逻辑基址
 }
 // 取消共享该内存区域，这意味着需要撤销该进程虚拟地址处的物理页映射
-void sys_shmdt(int key,void* addr){ //借鉴put_page
+int sys_shmdt(int key,void* addr){ //借鉴put_page
 	int shmid = key % SHM_CAP;
 	if(shmid<0||shmtable[shmid]==NULL)return NULL;
 	// 解除映射？需要什么东西？1.起始地址2.大小
 	unsigned long address = (unsigned long) addr;
-	for (int i = 0; i < shmtable[shmid]->page_cnt; i++) {
+	int i = 0;
+	for (; i < shmtable[shmid]->page_cnt; i++) {
 		unsigned long  *page_table = (unsigned long *) (((unsigned long)address>>20) & 0xffc);// 页目录号每个页目录项占4字节，页目录表物理基址为0，因此(addr>>20)<<2就得到了对应页表的物理基址
 		page_table = (unsigned long *) (0xfffff000 & *page_table); // 进入二级页表
-		page_table[((unsigned long)addr>>12) & 0x3ff] &= ~1;
+		page_table[((unsigned long)addr>>12) & 0x3ff] &= 0; // 
 	}
 	if(--shmtable[shmid]->ref_cnt <=0){
-		for (size_t i = 0; i < shmtable[shmid]->page_cnt; i++) 
+		i = 0;
+		for (; i < shmtable[shmid]->page_cnt; i++) 
 			free_page(shmtable[shmid]->pages[i]);
 		free_s(shmtable[shmid]->pages,shmtable[shmid]->page_cnt*4);
 		free_s(shmtable[shmid],9);
 		shmtable[shmid]=NULL;
 	}
+	return 0;
 }
 

@@ -81,7 +81,9 @@ __asm__("std ; repne ; scasb\n\t"
 	);
 return __res;
 }
-
+void add_mem_user(unsigned long addr){
+	mem_map[addr]++;
+}
 /*
  * Free a page of memory at physical address 'addr'. Used by
  * 'free_page_tables()'
@@ -204,7 +206,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 		printk("Trying to put page %p at %p\n",page,address);
 	if (mem_map[(page-LOW_MEM)>>12] != 1)
 		printk("mem_map disagrees with %p at %p\n",page,address);
-	page_table = (unsigned long *) ((address>>20) & 0xffc);// 页目录号每个页目录项占4字节，页目录表物理基址为0，因此(addr>>20)<<2就得到了对应页表的物理基址
+	page_table = (unsigned long *) ((address>>20) & 0xffc);// 页目录号每个页目录项占4字节，页目录表物理基址为0，因此(addr>>22)<<2就得到了目录项的物理基址
 	if ((*page_table)&1)
 		page_table = (unsigned long *) (0xfffff000 & *page_table); // 进入二级页表
 	else {
