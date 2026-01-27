@@ -11,7 +11,7 @@
 
 #include <stdarg.h>
 #include <string.h> 
-
+#include <asm/segment.h>
 /* we use this so that we can do without the ctype library */
 #define is_digit(c)	((c) >= '0' && (c) <= '9')
 
@@ -232,4 +232,31 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 	}
 	*str = '\0';
 	return str-buf;
+}
+int sprintf(char *buf, const char *fmt, ...)
+{
+	va_list args;
+	int i;
+	
+	va_start(args, fmt);
+	i = vsprintf(buf, fmt, args);
+	va_end(args);
+	
+	return i;
+}
+// xx,sd, 0-kn 1-fs
+
+int strcp(char * dest,const char * src,int slen,int dlen,char dire){
+	int i = 0;
+	char * source = src;
+	while (i<dlen&&i<slen)
+	{
+		char c = (dire & 2) ?  get_fs_byte(source++): *(source++); //get source  char
+		// put to dest
+		if(dire&1)// to fs
+			put_fs_byte(c,dest+i);
+		else dest[i]=c;
+		i++;
+	}
+	return i; //返回实际拷贝的字节数。
 }

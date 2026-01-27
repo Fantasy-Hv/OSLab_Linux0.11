@@ -22,6 +22,45 @@ extern int file_read(struct m_inode * inode, struct file * filp,
 extern int file_write(struct m_inode * inode, struct file * filp,
 		char * buf, int count);
 
+#define show_entry_len 41 // 5*4（数字）+4*5（空格）+1（\n）
+char table_head[] = "pid    father    stat    counter    start_time\n";//49bytes,remember to remove \0 when use
+//根据pos指定的位置 ，将内容写到缓冲区中，并修改pos，返回读取的字节数
+int proc_read(unsigned short dev,char* buf,int count,off_t* pos){
+	// 输出所有进程的pid，state，等信息，可以参考sched.c的show_task
+	// 难点在于根据pos找到对应的输出位置,pos是已经读了多少字节
+	// 1.输出表头行，
+	// 2.输出进程格式化行
+	/**
+	 * long state, 4
+	 * long counter, 4
+	 * long pid, 4
+	 * long father, 4
+	 * long start_time 4
+	 */
+	int wn = 0; //已经写入缓冲区的字节数,可以用来指示buff中下一个空位
+	if(*pos<48){ //如果还没打完表头
+		wn = strcp(buf,table_head+*pos,48,count, KNFS);
+		*pos+= wn;
+	}
+// 1.pos到输入字符串的映射，pos到进程号的映射
+	int i; // 需要根据pos找到下一个要被打印的进程信息。数进程，每数一个加len，直到len = pos
+	int pcn = 48;
+	for (i=0;i<NR_TASKS&&pcn<*pos;i++)
+		if(task[i])pcn+=show_entry_len;
+	if(i==NR_TASKS)return 0;
+	char entry[show_entry_len+1] ; //条目字符串带\0
+	for(;i<NR_TASKS&&wn<count;i++){
+		if(task[i]){
+			sprintf(entry,"%d     %d     %d     %d     %d\n",task[i]->pid,task[i]->father,task[i]->state,task[i]->counter,task[i]->start_time);
+			pcn = (*pos-48)%show_entry_len; // 当前条目已经写了多少字节
+			pcn = strcp(buf+wn,entry+pcn,show_entry_len-pcn,count-wn,KNFS); // 实际写了多少字节
+			wn+=pcn;
+			*pos+=pcn;
+		}
+	}
+	return wn;
+}
+
 int sys_lseek(unsigned int fd,off_t offset, int origin)
 {
 	struct file * file;
@@ -76,6 +115,8 @@ int sys_read(unsigned int fd,char * buf,int count)
 			return 0;
 		return file_read(inode,file,buf,count);
 	}
+	if(S_ISPROC(inode->i_mode))
+		return proc_read(inode->i_zone[0],buf,count,&file->f_pos);
 	printk("(Read)inode->i_mode=%06o\n\r",inode->i_mode);
 	return -EINVAL;
 }
@@ -101,3 +142,4 @@ int sys_write(unsigned int fd,char * buf,int count)
 	printk("(Write)inode->i_mode=%06o\n\r",inode->i_mode);
 	return -EINVAL;
 }
+
