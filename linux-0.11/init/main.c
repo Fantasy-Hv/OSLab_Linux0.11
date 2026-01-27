@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <time.h>
 
+
 /*
  * we need this inline - forking from kernel space will result
  * in NO COPY ON WRITE (!!!), until an execve is executed. This
@@ -164,12 +165,18 @@ static char * envp_rc[] = { "HOME=/", NULL };
 
 static char * argv[] = { "-/bin/sh",NULL };
 static char * envp[] = { "HOME=/usr/root", NULL };
-
+#ifndef __LIBRARY__
+#define __LIBRARY__
+#endif
+_syscall2(int,mkdir,const char*,name,mode_t,mode)
+_syscall3(int,mknod,const char*,filename,mode_t,mode,dev_t,dev)
 void init(void)
 {
 	int pid,i;
 
-	setup((void *) &drive_info);
+	setup((void *) &drive_info); // 挂载根文件系统
+	mkdir("/proc",0755);
+	mknod("/proc/psinfo", S_IFPROC|0444,4); //第三个设备号是区分文件内容类型的，在这里可以自定义
 	(void) open("/dev/tty0",O_RDWR,0);
 	(void) dup(0);
 	(void) dup(0);

@@ -68,7 +68,7 @@ void sync_inodes(void)
 			write_inode(inode);
 	}
 }
-
+// 根据文件内盘块号找到磁盘块号
 static int _bmap(struct m_inode * inode,int block,int create)
 {
 	struct buffer_head * bh;

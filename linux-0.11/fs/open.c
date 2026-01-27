@@ -142,25 +142,28 @@ int sys_open(const char * filename,int flag,int mode)
 	int i,fd;
 
 	mode &= 0777 & ~current->umask;
+	// 在进程描述符表（数组）中找一个空闲位置取fd
 	for(fd=0 ; fd<NR_OPEN ; fd++)
 		if (!current->filp[fd])
 			break;
 	if (fd>=NR_OPEN)
 		return -EINVAL;
 	current->close_on_exec &= ~(1<<fd);
-	f=0+file_table;
+	f=0+file_table; // 在全局打开文件表（数组）中找一个槽位
 	for (i=0 ; i<NR_FILE ; i++,f++)
 		if (!f->f_count) break;
 	if (i>=NR_FILE)
 		return -EINVAL;
-	(current->filp[fd]=f)->f_count++;
-	if ((i=open_namei(filename,flag,mode,&inode))<0) {
+	(current->filp[fd]=f)->f_count++; // 拉起一条从文件描述符表项到打开文件表的链
+	
+	// open_namei:解析路径，找到对应文件的inode
+	if ((i=open_namei(filename,flag,mode,&inode))<0) {// error occur
 		current->filp[fd]=NULL;
 		f->f_count=0;
 		return i;
 	}
 /* ttys are somewhat special (ttyxx major==4, tty major==5) */
-	if (S_ISCHR(inode->i_mode)) {
+	if (S_ISCHR(inode->i_mode)) { 
 		if (MAJOR(inode->i_zone[0])==4) {
 			if (current->leader && current->tty<0) {
 				current->tty = MINOR(inode->i_zone[0]);
@@ -177,6 +180,7 @@ int sys_open(const char * filename,int flag,int mode)
 /* Likewise with block-devices: check for floppy_change */
 	if (S_ISBLK(inode->i_mode))
 		check_disk_change(inode->i_zone[0]);
+
 	f->f_mode = inode->i_mode;
 	f->f_flags = flag;
 	f->f_count = 1;
