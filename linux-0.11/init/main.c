@@ -177,6 +177,7 @@ void init(void)
 	setup((void *) &drive_info); // 挂载根文件系统
 	mkdir("/proc",0755);
 	mknod("/proc/psinfo", S_IFPROC|0444,4); //第三个设备号是区分文件内容类型的，在这里可以自定义
+	mknod("/proc/hdinfo", S_IFPROC|0444,6);
 	(void) open("/dev/tty0",O_RDWR,0);
 	(void) dup(0);
 	(void) dup(0);

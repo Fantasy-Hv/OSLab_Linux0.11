@@ -11,7 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <asm/segment.h>
-
+#include <linux/fs.h>
 extern int rw_char(int rw,int dev, char * buf, int count, off_t * pos);
 extern int read_pipe(struct m_inode * inode, char * buf, int count);
 extern int write_pipe(struct m_inode * inode, char * buf, int count);
@@ -25,7 +25,7 @@ extern int file_write(struct m_inode * inode, struct file * filp,
 #define show_entry_len 41 // 5*4（数字）+4*5（空格）+1（\n）
 char table_head[] = "pid    father    stat    counter    start_time\n";//49bytes,remember to remove \0 when use
 //根据pos指定的位置 ，将内容写到缓冲区中，并修改pos，返回读取的字节数
-int proc_read(unsigned short dev,char* buf,int count,off_t* pos){
+int psinfo(char* buf,int count,off_t* pos){
 	// 输出所有进程的pid，state，等信息，可以参考sched.c的show_task
 	// 难点在于根据pos找到对应的输出位置,pos是已经读了多少字节
 	// 1.输出表头行，
@@ -59,6 +59,41 @@ int proc_read(unsigned short dev,char* buf,int count,off_t* pos){
 		}
 	}
 	return wn;
+}
+int count_bits(unsigned char byte) {
+    int count = 0;
+    while (byte) {
+        byte &= (byte - 1);  // 清除最低位的1
+        count++;
+    }
+    return count;
+}
+int hdinfo(char* buf,int count,off_t* pos){
+	if(*pos>=28)return 0;
+	 struct super_block * super = get_super(ROOT_DEV);
+	 struct buffer_head * zmap = super->s_zmap;
+	 int usedb = 0;
+	 int i = 0;
+	 for(;i<super_block->s_zmap_blocks;i++){
+		int j = 0;
+		for(;j<(1<<super->s_log_zone_size);j++)
+			usedb += count_bits(zmap->b_data[j]);
+		zmap = zmap->b_next;
+	 }
+	 char tmpbuf[30] ;
+	 sprintf(tmpbuf,"dev%d  %d used  %d total\n",super->s_dev,usedb,super->s_nzones);
+	 strcp(buf,tmpbuf,28,count,KNFS);
+     *pos = 28;
+	 return *pos;
+}
+
+int proc_read(unsigned short dev,char* buf,int count,off_t* pos){
+	if(dev==4)return psinfo(buf,count,pos);
+	else if(dev==6)return hdinfo(buf,count,pos);
+	else {
+	printk("bad dev\n");
+	return 0;
+	}
 }
 
 int sys_lseek(unsigned int fd,off_t offset, int origin)
